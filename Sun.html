@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D太阳系模型</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            z-index: 100;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        button {
+            padding: 5px 10px;
+            margin: 0 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">太阳系3D模型 - 使用鼠标拖动旋转视角，滚轮缩放</div>
+    <div id="controls">
+        <button id="zoomIn">放大</button>
+        <button id="zoomOut">缩小</button>
+        <button id="reset">重置视角</button>
+        <button id="toggleOrbits">切换轨道显示</button>
+    </div>
+    <!-- 新增显示星球名称的元素 -->
+    <div id="planetName" style="position: absolute; top: 10px; left: 10px; color: white; display: none;"></div>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // 初始化场景、相机和渲染器
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x000000);
+        document.body.appendChild(renderer.domElement);
+
+        // 添加轨道控制器
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.minDistance = 20;
+        controls.maxDistance = 500;
+
+        // 设置相机初始位置
+        camera.position.set(0, 150, 200);
+        controls.update();
+
+        // 添加环境光和方向光
+        const ambientLight = new THREE.AmbientLight(0x333333);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(0, 0, 1);
+        scene.add(directionalLight);
+
+        // 太阳光
+        const sunLight = new THREE.PointLight(0xffffff, 1.5, 300);
+        sunLight.castShadow = true;
+        scene.add(sunLight);
+
+        // 创建太阳和行星
+        const bodies = [];
+        const orbits = [];
+
+        // 辅助函数：创建天体
+        // 创建太阳和行星（比例和距离不按实际比例，否则无法在屏幕上显示）
+        
+        // 定义太阳的顶点着色器
+        const vertexShader = `
+            varying vec3 vUv;
+            void main() {
+                vUv = position;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `;
+        
+        // 定义太阳的片元着色器，模拟火焰效果
+        const fragmentShader = `
+            varying vec3 vUv;
+            uniform float time;
+            void main() {
+                vec3 center = vec3(0.0);
+                float dist = distance(vUv, center);
+                float intensity = sin(dist * 10.0 + time * 2.0);
+                intensity = (intensity + 1.0) / 2.0;
+                vec3 color = mix(vec3(1.0, 0.2, 0.0), vec3(1.0, 1.0, 0.0), intensity);
+                gl_FragColor = vec4(color, 1.0);
+            }
+        `;
+        
+        // 创建太阳时使用自定义材质
+        function createBody(name, radius, color, distance, orbitSpeed, parent = null, hasRing = false) {
+            let geometry = new THREE.SphereGeometry(radius, 32, 32);
+            let material;
+            if (name === '太阳') {
+                const uniforms = {
+                    time: { value: 0.0 }
+                };
+                material = new THREE.ShaderMaterial({
+                    uniforms: uniforms,
+                    vertexShader: vertexShader,
+                    fragmentShader: fragmentShader
+                });
+            } else {
+                material = new THREE.MeshPhongMaterial({ color });
+            }
+            const body = new THREE.Mesh(geometry, material);
+        
+            if (name === '太阳') {
+                body.position.set(0, 0, 0);
+                sunLight.position.copy(body.position);
+            } else {
+                body.position.set(distance, 0, 0);
+            }
+        
+            body.name = name;
+        
+            if (parent) {
+                parent.add(body);
+            } else {
+                scene.add(body);
+            }
+        
+            // 添加轨道线
+            if (name !== '太阳') {
+                const orbitGeometry = new THREE.BufferGeometry();
+                const orbitMaterial = new THREE.LineBasicMaterial({ color: 0x555555 });
+                const points = [];
+                const segments = 128;
+        
+                for (let i = 0; i <= segments; i++) {
+                    const theta = (i / segments) * Math.PI * 2;
+                    points.push(new THREE.Vector3(
+                        Math.cos(theta) * distance,
+                        0,
+                        Math.sin(theta) * distance
+                    ));
+                }
+        
+                orbitGeometry.setFromPoints(points);
+                const orbit = new THREE.Line(orbitGeometry, orbitMaterial);
+                // 移除轨道线绕X轴旋转90度的代码
+                // orbit.rotation.x = Math.PI / 2;
+        
+                if (parent) {
+                    parent.add(orbit);
+                } else {
+                    scene.add(orbit);
+                }
+        
+                orbits.push(orbit);
+            }
+        
+            // 添加行星环（如土星）
+            if (hasRing) {
+                const ringGeometry = new THREE.RingGeometry(radius * 1.5, radius * 2.5, 32);
+                const ringMaterial = new THREE.MeshPhongMaterial({ 
+                    color: 0xddddbb, 
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+                ring.rotation.x = Math.PI / 2;
+                body.add(ring);
+            }
+        
+            bodies.push({
+                name,
+                mesh: body,
+                distance,
+                orbitSpeed,
+                angle: Math.random() * Math.PI * 2
+            });
+        
+            return body;
+        }
+
+        const sun = createBody('太阳', 10, 0xffff00, 0, 0);
+        
+        // 水星
+        const mercury = createBody('水星', 2.5, 0xaaaaaa, 25, 0.04);
+        
+        // 金星
+        const venus = createBody('金星', 3.8, 0xffaa66, 40, 0.015);
+        
+        // 地球和月球
+        const earth = createBody('地球', 4, 0x3366ff, 60, 0.01);
+        const moon = createBody('月球', 1, 0xcccccc, 8, 0.05, earth);
+        
+        // 火星和它的卫星
+        const mars = createBody('火星', 3.2, 0xff3300, 80, 0.008);
+        const phobos = createBody('火卫一', 0.2, 0x888888, 2, 0.08, mars);
+        const deimos = createBody('火卫二', 0.1, 0x888888, 3, 0.06, mars);
+        
+        // 木星和它的部分卫星
+        const jupiter = createBody('木星', 8, 0xffcc99, 110, 0.002);
+        const io = createBody('木卫一', 0.8, 0xff6600, 6, 0.03, jupiter);
+        const europa = createBody('木卫二', 0.7, 0x99ccff, 8, 0.02, jupiter);
+        const ganymede = createBody('木卫三', 1, 0xaaaaaa, 10, 0.015, jupiter);
+        const callisto = createBody('木卫四', 0.9, 0x888888, 12, 0.01, jupiter);
+        
+        // 土星（带环）和它的部分卫星
+        const saturn = createBody('土星', 7, 0xdddd99, 150, 0.0009, null, true);
+        const titan = createBody('土卫六', 0.8, 0xff9966, 10, 0.005, saturn);
+        const rhea = createBody('土卫五', 0.6, 0xaaaaaa, 8, 0.007, saturn);
+        
+        // 天王星和它的部分卫星
+        const uranus = createBody('天王星', 6, 0x99ccff, 180, 0.0004);
+        const titania = createBody('天卫三', 0.6, 0x99ccff, 6, 0.006, uranus);
+        const oberon = createBody('天卫四', 0.5, 0x888888, 8, 0.005, uranus);
+        
+        // 海王星和它的卫星
+        const neptune = createBody('海王星', 5.8, 0x3366ff, 210, 0.0001);
+        const triton = createBody('海卫一', 0.7, 0x99ccff, 8, 0.004, neptune);
+        
+        // 冥王星和它的卫星
+        const pluto = createBody('冥王星', 1.5, 0x888888, 240, 0.00005);
+        const charon = createBody('冥卫一', 0.5, 0x888888, 3, 0.008, pluto);
+
+        // 添加星空背景
+        const starGeometry = new THREE.BufferGeometry();
+        const starMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.1
+        });
+        
+        const starVertices = [];
+        for (let i = 0; i < 5000; i++) {
+            const x = (Math.random() - 0.5) * 2000;
+            const y = (Math.random() - 0.5) * 2000;
+            const z = (Math.random() - 0.5) * 2000;
+            starVertices.push(x, y, z);
+        }
+        
+        starGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
+        const stars = new THREE.Points(starGeometry, starMaterial);
+        scene.add(stars);
+
+        // 动画循环
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // 更新太阳的时间均匀变量
+            if (sun.material.uniforms && sun.material.uniforms.time) {
+                sun.material.uniforms.time.value += 0.01;
+            }
+
+            // 更新行星位置
+            bodies.forEach(body => {
+                if (body.name !== '太阳') {
+                    body.angle += body.orbitSpeed;
+                    body.mesh.position.x = Math.cos(body.angle) * body.distance;
+                    body.mesh.position.z = Math.sin(body.angle) * body.distance;
+                }
+            });
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // 窗口大小调整
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // 控制按钮功能
+        document.getElementById('zoomIn').addEventListener('click', () => {
+            camera.fov /= 1.2;
+            camera.updateProjectionMatrix();
+        });
+        
+        document.getElementById('zoomOut').addEventListener('click', () => {
+            camera.fov *= 1.2;
+            camera.updateProjectionMatrix();
+        });
+        
+        document.getElementById('reset').addEventListener('click', () => {
+            camera.position.set(0, 150, 200);
+            camera.lookAt(0, 0, 0);
+            camera.fov = 75;
+            camera.updateProjectionMatrix();
+            controls.update();
+        });
+        
+        let orbitsVisible = true;
+        document.getElementById('toggleOrbits').addEventListener('click', () => {
+            orbitsVisible = !orbitsVisible;
+            orbits.forEach(orbit => {
+                orbit.visible = orbitsVisible;
+            });
+        });
+
+        // 创建一个 Raycaster 用于检测鼠标交互
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+    
+        // 定义星球中英文名称映射
+        const planetNameMap = {
+            '太阳': 'Sun',
+            '水星': 'Mercury',
+            '金星': 'Venus',
+            '地球': 'Earth',
+            '月球': 'Moon',
+            '火星': 'Mars',
+            '火卫一': 'Phobos',
+            '火卫二': 'Deimos',
+            '木星': 'Jupiter',
+            '木卫一': 'Io',
+            '木卫二': 'Europa',
+            '木卫三': 'Ganymede',
+            '木卫四': 'Callisto',
+            '土星': 'Saturn',
+            '土卫六': 'Titan',
+            '土卫五': 'Rhea',
+            '天王星': 'Uranus',
+            '天卫三': 'Titania',
+            '天卫四': 'Oberon',
+            '海王星': 'Neptune',
+            '海卫一': 'Triton',
+            '冥王星': 'Pluto',
+            '冥卫一': 'Charon'
+        };
+    
+        // 鼠标移动事件处理函数
+        function onMouseMove(event) {
+            // 计算鼠标在标准化设备坐标中的位置
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+    
+            // 通过鼠标位置更新射线
+            raycaster.setFromCamera(mouse, camera);
+    
+            // 计算射线与星球的交点
+            const intersects = raycaster.intersectObjects(bodies.map(body => body.mesh));
+    
+            const planetNameElement = document.getElementById('planetName');
+            if (intersects.length > 0) {
+                const planet = intersects[0].object;
+                const planetName = planet.name;
+                const englishName = planetNameMap[planetName];
+                planetNameElement.textContent = `${planetName} (${englishName})`;
+                // 设置显示名称的元素位置为鼠标位置
+                planetNameElement.style.left = `${event.clientX + 10}px`;
+                planetNameElement.style.top = `${event.clientY + 10}px`;
+                planetNameElement.style.display = 'block';
+            } else {
+                planetNameElement.style.display = 'none';
+            }
+        }
+    
+        // 监听鼠标移动事件
+        window.addEventListener('mousemove', onMouseMove, false);
+
+        animate();
+    </script>
+</body>
+</html>
